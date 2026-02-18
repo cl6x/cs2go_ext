@@ -2,7 +2,10 @@
 
 # cs2go
 
-cs2go is a simple external ESP for FPS game, written in Go.
+cs2go is a simple external ESP for FPS2 game, written in Go.
+
+Note:
+I will update the App every FPS2 Updates (when I'm available fyi) ASAP!, and probably with new features update (if I'm not lazy enough)
 
 ## Building the source code
 
@@ -31,4 +34,4 @@ Esp lagging?
 Search for cs2go.exe in task manager, expand, right click the process click "go to details"
 Set your priority to High, this should fix it.
 
-Thank you for using cs2go!
+Thank you for using cs2go! and Thanks to NYPDK or BQJ
