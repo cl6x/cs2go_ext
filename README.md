@@ -1,8 +1,8 @@
-<h1 style="color:red;">-----This program is depricated-----</h1>
+<h1 style="color:red;" align=center>-----This program is might be depricated-----</h1>
 
 # cs2go
 
-cs2go is a simple external ESP for Counter-Strike 2, written in Go.
+cs2go is a simple external ESP for FPS game, written in Go.
 
 ## Building the source code
 
@@ -25,11 +25,6 @@ Once you have installed Go, follow these steps:
 5. Run the program while in a match to use.
 
 If the compiler complains about not having `"github.com/lxn/win"`, `"golang.org/x/sys/windows"`, `"golang.org/x/sys/windows"` run `go get github.com/lxn/win`, `go get golang.org/x/sys/windows`, and `go get golang.org/x/sys/windows` | Finalize with `go mod tidy`
-## Example
-
-Check out this video for an example of cs2go in action:
-
-[![Example video](https://cdn-cf-east.streamable.com/image/zfdhd2.jpg?Expires=1697728523377&Key-Pair-Id=APKAIEYUVEN4EVB2OKEQ&Signature=Aa-U31-JQ7qM6QtpmCDH6xhnBWVkxSjMgY1olIlcVybPyZbQ0xdXaG6meRG5vfJlDttOBxAR7s48EEpr8GZca5SuxAKcpHRsqOYAeCnlIrP2LkcT3iIJ~VYy76I-AFUVYZVdnwTe8g6drr4IYMBCr7QIeDjOTjopKZYHi9-mcZ2X0YWiW~wCPcJKp6n3ariZAtdJvSsvUXi0TIMFCw0sKpFJFw80ytUMCNNDMgFa7GzWJvoudQ~j7QKIVBfJdISA6T3V9hld6FmXirYRWQqHVpMphmdfgv0U5LlSMZnk-hXD9JpD-UTTZhrg-RTLnLjTdP5UQ1ZDJ40OqLl6i~jMsA__)](https://streamable.com/zfdhd2)
 
 ## Issues
 Esp lagging?
