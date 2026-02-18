@@ -101,7 +101,7 @@ var (
 	healthBarRendering  bool   = true
 	healthTextRendering bool   = false
 	antiFlash           bool   = false
-	frameDelay          uint32 = 0
+	frameDelay          uint32 = 1
 )
 
 func init() {
@@ -623,11 +623,10 @@ func cliMenu() {
 			fmt.Println(chalk.Red.Color("[7] Name rendering [OFF]"))
 		}
 		if antiFlash {
-			fmt.Println(chalk.Green.Color("[8] Anti-Flash [ON]"))
+			fmt.Println(chalk.Green.Color("[8] Anti-Flash [ON]") + chalk.Red.Color(" (This feature uses Write memory - Use At Your Own Risk)"))
 		} else {
-			fmt.Println(chalk.Red.Color("[8] Anti-Flash [OFF]"))
+			fmt.Println(chalk.Red.Color("[8] Anti-Flash [OFF]") + chalk.Red.Color(" (This feature uses Write memory - Use At Your Own Risk)"))
 		}
-		fmt.Println(chalk.Cyan.Color("[F] Adjust frame delay [") + fmt.Sprint(frameDelay) + chalk.Cyan.Color("]"))
 		fmt.Println(chalk.Red.Color("[X] Exit"))
 		fmt.Print(chalk.Cyan.Color("[Enter selection]: "))
 		
@@ -653,12 +652,6 @@ func cliMenu() {
 			nameRendering = !nameRendering
 		case '8':
 			antiFlash = !antiFlash
-		case 'f', 'F':
-			fmt.Println(chalk.Red.Color("Higer frame delay = lower performance impact but higher ESP latency"))
-			fmt.Print(chalk.Cyan.Color("[Enter frame delay]: "))
-			var delay uint32
-			fmt.Scanln(&delay)
-			frameDelay = delay
 		case 'x', 'X':
 			os.Exit(0)
 		default:
