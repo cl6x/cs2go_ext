@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"runtime"
@@ -13,6 +12,7 @@ import (
 	"unicode"
 	"unsafe"
 
+	"github.com/eiannone/keyboard"
 	"github.com/lxn/win"
 	"github.com/ttacon/chalk"
 	"golang.org/x/sys/windows"
@@ -53,6 +53,10 @@ type Entity struct {
 	Rect     Rectangle
 }
 
+type FrameData struct {
+	Entities []Entity
+}
+
 type Offset struct {
 	DwViewMatrix           uintptr `json:"dwViewMatrix"`
 	DwLocalPlayerPawn      uintptr `json:"dwLocalPlayerPawn"`
@@ -67,30 +71,37 @@ type Offset struct {
 	M_boneArray            uintptr `json:"m_boneArray"`
 	M_nodeToWorld          uintptr `json:"m_nodeToWorld"`
 	M_sSanitizedPlayerName uintptr `json:"m_sSanitizedPlayerName"`
+	M_flFlashDuration      uintptr `json:"m_flFlashDuration"`
+	M_flFlashMaxAlpha      uintptr `json:"m_flFlashMaxAlpha"`
 }
 
 var (
 	user32                     = windows.NewLazySystemDLL("user32.dll")
 	gdi32                      = windows.NewLazySystemDLL("gdi32.dll")
+	kernel32                   = windows.NewLazySystemDLL("kernel32.dll")
 	getSystemMetrics           = user32.NewProc("GetSystemMetrics")
 	setLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
 	showCursor                 = user32.NewProc("ShowCursor")
+	setWindowDisplayAffinity   = user32.NewProc("SetWindowDisplayAffinity")
 	setTextAlign               = gdi32.NewProc("SetTextAlign")
 	createFont                 = gdi32.NewProc("CreateFontW")
 	createCompatibleDC         = gdi32.NewProc("CreateCompatibleDC")
 	createSolidBrush           = gdi32.NewProc("CreateSolidBrush")
 	createPen                  = gdi32.NewProc("CreatePen")
+	allocConsole               = kernel32.NewProc("AllocConsole")
+	getConsoleWindow           = kernel32.NewProc("GetConsoleWindow")
 )
 
 var (
 	teamCheck           bool   = true
-	headCircle          bool   = true
-	skeletonRendering   bool   = true
-	boxRendering        bool   = true
-	nameRendering       bool   = true
+	headCircle          bool   = false
+	skeletonRendering   bool   = false
+	boxRendering        bool   = false
+	nameRendering       bool   = false
 	healthBarRendering  bool   = true
-	healthTextRendering bool   = true
-	frameDelay          uint32 = 15
+	healthTextRendering bool   = false
+	antiFlash           bool   = false
+	frameDelay          uint32 = 0
 )
 
 func init() {
@@ -99,7 +110,7 @@ func init() {
 }
 
 func logAndSleep(message string, err error) {
-	log.Printf("%s: %v\n", message, err)
+	fmt.Printf("%s: %v\n", message, err)
 	time.Sleep(5 * time.Second)
 }
 
@@ -146,12 +157,12 @@ func getOffsets() Offset {
 	return offsets
 }
 
-func getEntitiesInfo(procHandle windows.Handle, clientDll uintptr, screenWidth uintptr, screenHeight uintptr, offsets Offset) []Entity {
+func getEntitiesInfo(procHandle windows.Handle, clientDll uintptr, screenWidth uintptr, screenHeight uintptr, offsets Offset) FrameData {
 	var entityList uintptr
-	var entities []Entity
+	var data FrameData
 	err := read(procHandle, clientDll+offsets.DwEntityList, &entityList)
 	if err != nil {
-		return entities
+		return data
 	}
 	var (
 		localPlayerP           uintptr
@@ -201,74 +212,75 @@ func getEntitiesInfo(procHandle windows.Handle, clientDll uintptr, screenWidth u
 	// localPlayerP
 	err = read(procHandle, clientDll+offsets.DwLocalPlayerPawn, &localPlayerP)
 	if err != nil {
-		return entities
+		return data
 	}
+
+	if antiFlash {
+		var flashDuration float32 = 0
+		var flashMaxAlpha float32 = 0
+		write(procHandle, localPlayerP+offsets.M_flFlashDuration, flashDuration)
+		write(procHandle, localPlayerP+offsets.M_flFlashMaxAlpha, flashMaxAlpha)
+	}
+
 	// localPlayerGameScene
 	err = read(procHandle, localPlayerP+offsets.M_pGameSceneNode, &localPlayerGameScene)
 	if err != nil {
-		return entities
+		return data
 	}
 	// localPlayerSceneOrigin
 	err = read(procHandle, localPlayerGameScene+offsets.M_nodeToWorld, &localPlayerSceneOrigin)
 	if err != nil {
-		return entities
+		return data
 	}
 	// viewMatrix
 	err = read(procHandle, clientDll+offsets.DwViewMatrix, &viewMatrix)
 	if err != nil {
-		return entities
+		return data
 	}
+
 	for i := 0; i < 64; i++ {
-		var tempEntity Entity
-		var entityBones map[string]Vector2 = make(map[string]Vector2)
-		var sanitizedName strings.Builder
 		// listEntry
 		err = read(procHandle, entityList+uintptr((8*(i&0x7FFF)>>9)+16), &listEntry)
-		if err != nil {
-			return entities
-		}
-		if listEntry == 0 {
+		if err != nil || listEntry == 0 {
 			continue
 		}
 		// entityController
-		err = read(procHandle, listEntry+uintptr(120)*uintptr(i&0x1FF), &entityController)
-		if err != nil {
-			return entities
-		}
-		if entityController == 0 {
+		err = read(procHandle, listEntry+uintptr(112)*uintptr(i&0x1FF), &entityController)
+		if err != nil || entityController == 0 {
 			continue
 		}
-		// entityControllerPawn
+
+		// entityControllerPawn handle
 		err = read(procHandle, entityController+offsets.M_hPlayerPawn, &entityControllerPawn)
-		if err != nil {
-			return entities
-		}
-		if entityControllerPawn == 0 {
+		if err != nil || entityControllerPawn == 0 {
 			continue
 		}
-		// listEntry
-		err = read(procHandle, entityList+uintptr(0x8*((entityControllerPawn&0x7FFF)>>9)+16), &listEntry)
-		if err != nil {
-			return entities
-		}
-		if listEntry == 0 {
+		// listEntry for Pawn
+		pawnListEntry := uintptr(0)
+		err = read(procHandle, entityList+uintptr(0x8*((entityControllerPawn&0x7FFF)>>9)+16), &pawnListEntry)
+		if err != nil || pawnListEntry == 0 {
 			continue
 		}
-		// entityPawn
-		err = read(procHandle, listEntry+uintptr(120)*uintptr(entityControllerPawn&0x1FF), &entityPawn)
-		if err != nil {
-			return entities
-		}
-		if entityPawn == 0 {
+		// entityPawn address
+		err = read(procHandle, pawnListEntry+uintptr(112)*uintptr(entityControllerPawn&0x1FF), &entityPawn)
+		if err != nil || entityPawn == 0 {
 			continue
 		}
+
 		if entityPawn == localPlayerP {
 			continue
 		}
+
+		// entityHealth
+		err = read(procHandle, entityPawn+offsets.M_iHealth, &entityHealth)
+		if err != nil {
+			continue
+		}
+
 		// entityLifeState
 		err = read(procHandle, entityPawn+offsets.M_lifeState, &entityLifeState)
 		if err != nil {
-			return entities
+			continue
 		}
 		if entityLifeState != 256 {
 			continue
@@ -276,7 +288,7 @@ func getEntitiesInfo(procHandle windows.Handle, clientDll uintptr, screenWidth u
 		// entityTeam
 		err = read(procHandle, entityPawn+offsets.M_iTeamNum, &entityTeam)
 		if err != nil {
-			return entities
+			continue
 		}
 		if entityTeam == 0 {
 			continue
@@ -285,33 +297,30 @@ func getEntitiesInfo(procHandle windows.Handle, clientDll uintptr, screenWidth u
 			// localTeam
 			err = read(procHandle, localPlayerP+offsets.M_iTeamNum, &localTeam)
 			if err != nil {
-				return entities
+				continue
 			}
 			if localTeam == entityTeam {
 				continue
 			}
 		}
-		// entityHealth
-		err = read(procHandle, entityPawn+offsets.M_iHealth, &entityHealth)
-		if err != nil {
-			return entities
-		}
+		
 		if entityHealth < 1 || entityHealth > 100 {
 			continue
 		}
 		// entityNameAddress
 		err = read(procHandle, entityController+offsets.M_sSanitizedPlayerName, &entityNameAddress)
 		if err != nil {
-			return entities
+			continue
 		}
 		// entityName
 		err = read(procHandle, entityNameAddress, &entityName)
 		if err != nil {
-			return entities
+			continue
 		}
 		if entityName == "" {
 			continue
 		}
+		var sanitizedName strings.Builder
 		for _, c := range entityName {
 			if unicode.IsLetter(c) || unicode.IsDigit(c) || unicode.IsPunct(c) || unicode.IsSpace(c) {
 				sanitizedName.WriteRune(c)
@@ -321,7 +330,7 @@ func getEntitiesInfo(procHandle windows.Handle, clientDll uintptr, screenWidth u
 		// gameScene
 		err = read(procHandle, entityPawn+offsets.M_pGameSceneNode, &gameScene)
 		if err != nil {
-			return entities
+			continue
 		}
 		if gameScene == 0 {
 			continue
@@ -329,7 +338,7 @@ func getEntitiesInfo(procHandle windows.Handle, clientDll uintptr, screenWidth u
 		// entityBoneArray
 		err = read(procHandle, gameScene+offsets.M_modelState+offsets.M_boneArray, &entityBoneArray)
 		if err != nil {
-			return entities
+			continue
 		}
 		if entityBoneArray == 0 {
 			continue
@@ -337,19 +346,17 @@ func getEntitiesInfo(procHandle windows.Handle, clientDll uintptr, screenWidth u
 		// entityOrigin
 		err = read(procHandle, entityPawn+offsets.M_vOldOrigin, &entityOrigin)
 		if err != nil {
-			return entities
+			continue
 		}
 		// boneArray
+		var entityBones map[string]Vector2 = make(map[string]Vector2)
 		for boneName, boneIndex := range bones {
 			err = read(procHandle, entityBoneArray+uintptr(boneIndex)*32, &currentBone)
 			if err != nil {
-				return entities
+				continue
 			}
 			if boneName == "head" {
 				entityHead = currentBone
-				if !skeletonRendering {
-					break
-				}
 			}
 			boneX, boneY := worldToScreen(viewMatrix, currentBone)
 			entityBones[boneName] = Vector2{boneX, boneY}
@@ -366,6 +373,7 @@ func getEntitiesInfo(procHandle windows.Handle, clientDll uintptr, screenWidth u
 		}
 		boxHeight := screenPosFeetY - screenPosBoxTop
 
+		var tempEntity Entity
 		tempEntity.Health = entityHealth
 		tempEntity.Team = entityTeam
 		tempEntity.Name = sanitizedNameStr
@@ -375,9 +383,9 @@ func getEntitiesInfo(procHandle windows.Handle, clientDll uintptr, screenWidth u
 		tempEntity.HeadPos = Vector3{screenPosHeadX, screenPosHeadTopY, screenPosHeadBottomY}
 		tempEntity.Rect = Rectangle{screenPosBoxTop, screenPosFeetX - boxHeight/4, screenPosFeetX + boxHeight/4, screenPosFeetY}
 
-		entities = append(entities, tempEntity)
+		data.Entities = append(data.Entities, tempEntity)
 	}
-	return entities
+	return data
 }
 
 func drawSkeleton(hdc win.HDC, pen uintptr, bones map[string]Vector2) {
@@ -490,12 +498,12 @@ func windowProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 
 func initWindow(screenWidth uintptr, screenHeight uintptr) win.HWND {
 
-	className, err := windows.UTF16PtrFromString("cs2goWindow")
+	className, err := windows.UTF16PtrFromString("chairWindow")
 	if err != nil {
 		logAndSleep("Error creating window class name", err)
 		return 0
 	}
-	windowTitle, err := windows.UTF16PtrFromString("cs2go")
+	windowTitle, err := windows.UTF16PtrFromString("chair")
 	if err != nil {
 		logAndSleep("Error creating window title", err)
 		return 0
@@ -555,6 +563,14 @@ func initWindow(screenWidth uintptr, screenHeight uintptr) win.HWND {
 	// Set the new extended window style
 	win.SetWindowLongPtr(hwnd, win.GWL_EXSTYLE, style)
 
+	const WDA_EXCLUDEFROMCAPTURE = 0x00000011
+    
+    affResult, _, err := setWindowDisplayAffinity.Call(uintptr(hwnd), WDA_EXCLUDEFROMCAPTURE)
+    if affResult == 0 {
+        // Note: This might fail on very old Windows versions (Pre-Win 10 2004)
+        fmt.Println("Warning: Failed to set window affinity (OBS Proofing):", err)
+    }
+
 	showCursor.Call(0)
 
 	// Show window
@@ -563,9 +579,14 @@ func initWindow(screenWidth uintptr, screenHeight uintptr) win.HWND {
 }
 
 func cliMenu() {
+	if err := keyboard.Open(); err != nil {
+		panic(err)
+	}
+	defer keyboard.Close()
+
 	for {
-		fmt.Print(chalk.Magenta.Color("          ____             \n  ___ ___|___ \\ ____  ___  \n / __/ __| __) / _  |/ _ \\ \n| (__\\__ \\/ __/ (_| | (_) |\n \\___|___/_____\\__, |\\___/ \n               |___/       \n"))
-		fmt.Println(chalk.Dim.TextStyle("\t\tby bqj - v1.6\n"))
+		fmt.Println("\033[H\033[2J") // Clear console
+		fmt.Println(chalk.Dim.TextStyle("\t\thave fun I guess\n"))
 		if teamCheck {
 			fmt.Println(chalk.Green.Color("[1] Team check [ON]"))
 		} else {
@@ -601,44 +622,61 @@ func cliMenu() {
 		} else {
 			fmt.Println(chalk.Red.Color("[7] Name rendering [OFF]"))
 		}
-		fmt.Println(chalk.Cyan.Color("[8] Adjust frame delay [") + fmt.Sprint(frameDelay) + chalk.Cyan.Color("]"))
-		fmt.Println(chalk.Red.Color("[9] Exit"))
+		if antiFlash {
+			fmt.Println(chalk.Green.Color("[8] Anti-Flash [ON]"))
+		} else {
+			fmt.Println(chalk.Red.Color("[8] Anti-Flash [OFF]"))
+		}
+		fmt.Println(chalk.Cyan.Color("[F] Adjust frame delay [") + fmt.Sprint(frameDelay) + chalk.Cyan.Color("]"))
+		fmt.Println(chalk.Red.Color("[X] Exit"))
 		fmt.Print(chalk.Cyan.Color("[Enter selection]: "))
-		var input string
-		fmt.Scanln(&input)
-		switch input {
-		case "1":
+		
+		char, _, err := keyboard.GetKey()
+		if err != nil {
+			panic(err)
+		}
+
+		switch char {
+		case '1':
 			teamCheck = !teamCheck
-		case "2":
+		case '2':
 			headCircle = !headCircle
-		case "3":
+		case '3':
 			skeletonRendering = !skeletonRendering
-		case "4":
+		case '4':
 			boxRendering = !boxRendering
-		case "5":
+		case '5':
 			healthBarRendering = !healthBarRendering
-		case "6":
+		case '6':
 			healthTextRendering = !healthTextRendering
-		case "7":
+		case '7':
 			nameRendering = !nameRendering
-		case "8":
+		case '8':
+			antiFlash = !antiFlash
+		case 'f', 'F':
 			fmt.Println(chalk.Red.Color("Higer frame delay = lower performance impact but higher ESP latency"))
 			fmt.Print(chalk.Cyan.Color("[Enter frame delay]: "))
 			var delay uint32
 			fmt.Scanln(&delay)
 			frameDelay = delay
-		case "9":
+		case 'x', 'X':
 			os.Exit(0)
 		default:
 			fmt.Println(chalk.Red.Color("Invalid selection"))
 			time.Sleep(1 * time.Second)
 		}
-		// Clear the console
-		fmt.Print("\033[H\033[2J")
 	}
 }
 
 func main() {
+	// Debug: File logging as a last resort for very early execution (removed after console fixed)
+	if consoleWindow, _, _ := getConsoleWindow.Call(); consoleWindow == 0 {
+		allocConsole.Call()
+		time.Sleep(100 * time.Millisecond) // Give the console a moment to fully initialize
+	}
+	fmt.Println("Program starting... (visible via console)") // Debug print to console
+
+
 	go cliMenu()
 
 	screenWidth, _, _ := getSystemMetrics.Call(0)
@@ -733,8 +771,8 @@ func main() {
 		win.SetBkMode(win.HDC(memhdc), win.TRANSPARENT)
 		win.SelectObject(win.HDC(memhdc), win.HGDIOBJ(font))
 
-		entities := getEntitiesInfo(procHandle, clientDll, screenWidth, screenHeight, offsets)
-		for _, entity := range entities {
+		data := getEntitiesInfo(procHandle, clientDll, screenWidth, screenHeight, offsets)
+		for _, entity := range data.Entities {
 			if entity.Distance < 35 {
 				continue
 			}
@@ -747,6 +785,7 @@ func main() {
 				renderEntityInfo(win.HDC(memhdc), bluePen, greenPen, outlinePen, bonePen, entity.Rect, entity.Health, entity.Name, entity.HeadPos)
 			}
 		}
+
 		win.BitBlt(hdc, 0, 0, int32(screenWidth), int32(screenHeight), win.HDC(memhdc), 0, 0, win.SRCCOPY)
 
 		// Delete the memory bitmap and device context

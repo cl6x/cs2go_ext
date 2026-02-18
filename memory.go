@@ -13,8 +13,7 @@ import (
 )
 
 func getProcessHandle(pid int) (windows.Handle, error) {
-	// windows.PROCESS_VM_READ|windows.PROCESS_VM_WRITE|windows.PROCESS_VM_OPERATION
-	return windows.OpenProcess(windows.PROCESS_VM_READ, false, uint32(pid))
+	return windows.OpenProcess(windows.PROCESS_VM_READ|windows.PROCESS_VM_WRITE|windows.PROCESS_VM_OPERATION, false, uint32(pid))
 }
 
 func findProcessId(name string) (int, error) {
@@ -66,15 +65,17 @@ func getModuleBaseAddress(pid int, moduleName string) (uintptr, error) {
 
 func read(process windows.Handle, address uintptr, value interface{}) error {
 	var buffer []byte
-	size := int(reflect.TypeOf(value).Elem().Size())
+	var size int
+	if _, ok := value.(*string); ok {
+		size = 64 // Assume max 64 chars for names
+	} else {
+		size = int(reflect.TypeOf(value).Elem().Size())
+	}
 	buffer = make([]byte, size)
 	bytesRead := uintptr(0)
 	err := windows.ReadProcessMemory(process, address, &buffer[0], uintptr(len(buffer)), &bytesRead)
 	if err != nil {
 		return err
-	}
-	if bytesRead != uintptr(len(buffer)) {
-		return fmt.Errorf("read %d bytes, expected %d", bytesRead, len(buffer))
 	}
 	switch v := value.(type) {
 	case *int32:
@@ -92,7 +93,12 @@ func read(process windows.Handle, address uintptr, value interface{}) error {
 	case *uintptr:
 		*v = uintptr(binary.LittleEndian.Uint64(buffer))
 	case *string:
-		*v = string(buffer[:bytesRead])
+		nullIdx := bytes.IndexByte(buffer, 0)
+		if nullIdx != -1 {
+			*v = string(buffer[:nullIdx])
+		} else {
+			*v = string(buffer[:bytesRead])
+		}
 	case *Vector3:
 		v.X = math.Float32frombits(binary.LittleEndian.Uint32(buffer[0:4]))
 		v.Y = math.Float32frombits(binary.LittleEndian.Uint32(buffer[4:8]))
@@ -106,19 +112,19 @@ func read(process windows.Handle, address uintptr, value interface{}) error {
 	return nil
 }
 
-// func write(process windows.Handle, address uintptr, value interface{}) error {
-// 	var buffer bytes.Buffer
-// 	err := binary.Write(&buffer, binary.LittleEndian, value)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	bytesWritten := uintptr(0)
-// 	err = windows.WriteProcessMemory(process, address, &buffer.Bytes()[0], uintptr(buffer.Len()), &bytesWritten)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	if bytesWritten != uintptr(buffer.Len()) {
-// 		return fmt.Errorf("wrote %d bytes, expected %d", bytesWritten, buffer.Len())
-// 	}
-// 	return nil
-// }
+func write(process windows.Handle, address uintptr, value interface{}) error {
+	var buffer bytes.Buffer
+	err := binary.Write(&buffer, binary.LittleEndian, value)
+	if err != nil {
+		return err
+	}
+	bytesWritten := uintptr(0)
+	err = windows.WriteProcessMemory(process, address, &buffer.Bytes()[0], uintptr(buffer.Len()), &bytesWritten)
+	if err != nil {
+		return err
+	}
+	if bytesWritten != uintptr(buffer.Len()) {
+		return fmt.Errorf("wrote %d bytes, expected %d", bytesWritten, buffer.Len())
+	}
+	return nil
+}
